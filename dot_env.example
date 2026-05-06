@@ -1,0 +1,11 @@
+# AWS Cargo login credentials
+AWS_USERNAME=your login
+AWS_PASSWORD=your pass
+
+# Pushover credentials
+PUSHOVER_USER=pushover user
+PUSHOVER_TOKEN=pushover token
+PUSHOVER_TOKEN_AWS=your token for the AWS notifications
+
+# Optional: custom SQLite database path
+# DB_NAME=packages.db
