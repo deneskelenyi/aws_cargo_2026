@@ -1,10 +1,11 @@
 """
-Main orchestrator: scrape packages, store in SQLite, notify via Pushover.
+Main orchestrator: scrape packages, store in SQLite, notify via Pushover/Telegram.
 
 Usage:
-    python main.py               # scrape + send alerts
+    python main.py               # scrape + send consolidated alerts
     python main.py --dry-run     # scrape only, print what would be sent
     python main.py --no-scrape   # skip scraping, just retry sending unsent alerts
+    python main.py --individual  # send one alert per package instead of consolidating
 
 Environment (loaded from .env):
     AWS_USERNAME          AWS Cargo username
@@ -12,6 +13,10 @@ Environment (loaded from .env):
     PUSHOVER_USER         Pushover user key
     PUSHOVER_TOKEN        Pushover app token (default)
     PUSHOVER_TOKEN_AWS    Pushover app token (optional)
+    WEBHOOK_HOST          Telegram webhook base host
+    WEBHOOK_PATH          Telegram webhook path prefix
+    SEND_API_KEY          Telegram webhook API key
+    TELEGRAM_RECIPIENT    Default Telegram chat id
     CAMOFOX_URL           Optional Camoufox REST server URL
     DB_NAME               Optional custom SQLite path (default: packages.db)
 """
@@ -32,15 +37,15 @@ else:
 
 from db import init_db, insert_or_update_package, get_unsent_packages, mark_as_sent
 from scraper import scrape_packages
-from notifier import send_package_alert
+from notifier import send_consolidated_alert, send_package_alert
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="AWS Cargo scraper + Pushover alerts")
+    parser = argparse.ArgumentParser(description="AWS Cargo scraper + Pushover/Telegram alerts")
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Print what would be sent without actually contacting Pushover or marking sent",
+        help="Print what would be sent without actually contacting Pushover/Telegram or marking sent",
     )
     parser.add_argument(
         "--no-scrape",
@@ -51,6 +56,11 @@ def main() -> None:
         "--aws-token",
         action="store_true",
         help="Use PUSHOVER_TOKEN_AWS instead of PUSHOVER_TOKEN",
+    )
+    parser.add_argument(
+        "--individual",
+        action="store_true",
+        help="Send one alert per package instead of a single consolidated message",
     )
     args = parser.parse_args()
 
@@ -70,7 +80,7 @@ def main() -> None:
 
         print(f"[main] Persisting {len(packages)} rows...")
         for pkg in packages:
-            insert_or_update_package(
+            result = insert_or_update_package(
                 tracking=pkg["tracking"],
                 description=pkg.get("description") or None,
                 price=pkg.get("price") or None,
@@ -78,6 +88,13 @@ def main() -> None:
                 last_updated=pkg.get("last_updated") or None,
                 db_name=db_name,
             )
+            tags = []
+            if result["was_new"]:
+                tags.append("new")
+            if result["status_changed"]:
+                tags.append("status changed")
+            tag_str = f" ({', '.join(tags)})" if tags else ""
+            print(f"  -> {pkg['tracking']}{tag_str}")
     else:
         print("[main] --no-scrape passed; skipping scrape.")
 
@@ -90,17 +107,39 @@ def main() -> None:
     print(f"[main] {len(unsent)} unsent package(s) to alert.")
     for pkg in unsent:
         tracking = pkg["tracking"]
-        status   = pkg.get("status", "N/A")
+        status = pkg.get("status", "N/A")
         print(f"  -> {tracking} [{status}]")
-        if args.dry_run:
-            print("    (dry-run: not sending)")
-            continue
+
+    if args.dry_run:
+        print("[main] (dry-run: not sending)")
+        print("[main] Done.")
+        return
+
+    if args.individual:
+        for pkg in unsent:
+            tracking = pkg["tracking"]
+            try:
+                send_package_alert(pkg, use_aws_token=args.aws_token, db_name=db_name)
+                mark_as_sent(tracking, db_name)
+                print(f"    Alert sent for {tracking}.")
+            except Exception as exc:
+                print(f"    Alert FAILED for {tracking}: {exc}")
+    else:
         try:
-            send_package_alert(pkg, use_aws_token=args.aws_token)
-            mark_as_sent(tracking, db_name)
-            print("    Pushover OK, marked as sent.")
+            result = send_consolidated_alert(
+                unsent, use_aws_token=args.aws_token, db_name=db_name
+            )
+            for pkg in unsent:
+                mark_as_sent(pkg["tracking"], db_name)
+            chunks = []
+            if result.get("pushover"):
+                chunks.append(f"Pushover {result['pushover']['chunks']} chunk(s)")
+            if result.get("telegram"):
+                chunks.append(f"Telegram {result['telegram']['chunks']} chunk(s)")
+            chunk_str = f" ({', '.join(chunks)})" if chunks else ""
+            print(f"[main] Consolidated alert sent for {len(unsent)} package(s){chunk_str}.")
         except Exception as exc:
-            print(f"    Pushover FAILED for {tracking}: {exc}")
+            print(f"[main] Consolidated alert FAILED: {exc}")
 
     print("[main] Done.")
 

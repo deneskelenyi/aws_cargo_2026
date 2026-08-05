@@ -2,10 +2,20 @@
 AWS_USERNAME=your login
 AWS_PASSWORD=your pass
 
-# Pushover credentials
-PUSHOVER_USER=pushover user
-PUSHOVER_TOKEN=pushover token
-PUSHOVER_TOKEN_AWS=your token for the AWS notifications
+# Pushover credentials (optional if you use Telegram)
+PUSHOVER_USER=your_pushover_user
+PUSHOVER_TOKEN=your_pushover_token
+PUSHOVER_TOKEN_AWS=your_optional_aws_token
+
+# Telegram webhook sender (optional if you use Pushover)
+WEBHOOK_HOST=https://your-webhook-host.example
+WEBHOOK_PATH=/webhooktg/
+SEND_API_KEY=your_send_api_key
+TELEGRAM_RECIPIENT=your_telegram_chat_id
 
 # Optional: custom SQLite database path
 # DB_NAME=packages.db
+
+# Optional: Flask web UI settings
+# FLASK_PORT=5000
+# FLASK_SECRET_KEY=change-me-in-production

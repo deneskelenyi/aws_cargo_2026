@@ -20,6 +20,60 @@ from playwright.sync_api import sync_playwright
 LOGIN_URL     = "https://www.awscargo.com/login"
 PACKAGES_URL  = "https://www.awscargo.com/en/account/packages"
 DEFAULT_TIMEOUT = 15000  # ms
+ROWS_PER_PAGE = 20       # try to show this many rows before extracting
+
+
+def _set_rows_per_page(page: Any, target: int = ROWS_PER_PAGE) -> bool:
+    """
+    Try to set the packages table rows-per-page dropdown to `target`.
+
+    Supports common DataTables selectors and a few generic fallbacks.
+    Returns True if an option was successfully selected.
+    """
+    selectors = [
+        'select[name$="_length"]',
+        '.dataTables_length select',
+        'select:has(option[value="20"])',
+        'select:has(option:has-text("20"))',
+    ]
+    for sel in selectors:
+        select = page.locator(sel).first
+        try:
+            if select.count() == 0:
+                continue
+            # DataTables length menus usually use numeric values/labels.
+            try:
+                select.select_option(str(target))
+            except Exception:
+                select.select_option(label=str(target))
+            print(f"[scraper] Set rows per page to {target}.")
+            return True
+        except Exception:
+            continue
+    print("[scraper] Rows-per-page dropdown not found; using current page size.")
+    return False
+
+
+def _extract_rows(page: Any) -> List[dict]:
+    """Extract package rows from the current page's table."""
+    return page.evaluate("""
+        () => {
+            const trs = document.querySelectorAll('table tbody tr');
+            const data = [];
+            for (const tr of trs) {
+                const cells = tr.querySelectorAll('td');
+                if (cells.length < 5) continue;
+                data.push({
+                    tracking:    cells[0]?.innerText?.trim() || '',
+                    description: cells[1]?.innerText?.trim() || '',
+                    price:       cells[2]?.innerText?.trim() || '',
+                    status:      cells[3]?.innerText?.trim() || '',
+                    last_updated: cells[4]?.innerText?.trim() || ''
+                });
+            }
+            return data;
+        }
+    """)
 
 
 def _make_browser(p: Any) -> Any:
@@ -119,25 +173,16 @@ def scrape_packages(
             browser.close()
             return []
 
-        # Extract data via JavaScript for maximum robustness.
-        rows = page.evaluate("""
-            () => {
-                const trs = document.querySelectorAll('table tbody tr');
-                const data = [];
-                for (const tr of trs) {
-                    const cells = tr.querySelectorAll('td');
-                    if (cells.length < 5) continue;
-                    data.push({
-                        tracking:    cells[0]?.innerText?.trim() || '',
-                        description: cells[1]?.innerText?.trim() || '',
-                        price:       cells[2]?.innerText?.trim() || '',
-                        status:      cells[3]?.innerText?.trim() || '',
-                        last_updated: cells[4]?.innerText?.trim() || ''
-                    });
-                }
-                return data;
-            }
-        """)
+        # Try to show more rows per page before extracting (default is often 10).
+        if _set_rows_per_page(page):
+            # Give the table a moment to reload its data.
+            page.wait_for_timeout(1500)
+            try:
+                page.wait_for_selector("table tbody tr", timeout=DEFAULT_TIMEOUT)
+            except Exception:
+                pass
+
+        rows = _extract_rows(page)
 
         browser.close()
         print(f"[scraper] Scraped {len(rows)} packages.")

@@ -1,0 +1,17 @@
+# Environment / secrets
+.env
+
+# SQLite databases
+*.db
+*.db-shm
+*.db-wal
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# User-provided test script (contains personal defaults)
+telegram_sender_test.py
