@@ -15,3 +15,8 @@ venv/
 
 # User-provided test script (contains personal defaults)
 telegram_sender_test.py
+
+# Debug page snapshots (may contain sensitive package data)
+packages_page.html
+packages_page.png
+

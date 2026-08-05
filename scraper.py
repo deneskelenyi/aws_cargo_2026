@@ -20,28 +20,29 @@ from playwright.sync_api import sync_playwright
 LOGIN_URL     = "https://www.awscargo.com/login"
 PACKAGES_URL  = "https://www.awscargo.com/en/account/packages"
 DEFAULT_TIMEOUT = 15000  # ms
-ROWS_PER_PAGE = 20       # try to show this many rows before extracting
+ROWS_PER_PAGE = 25       # try to show this many rows before extracting
 
 
 def _set_rows_per_page(page: Any, target: int = ROWS_PER_PAGE) -> bool:
     """
     Try to set the packages table rows-per-page dropdown to `target`.
 
-    Supports common DataTables selectors and a few generic fallbacks.
-    Returns True if an option was successfully selected.
+    Supports the AWS Cargo Bootstrap-style select as well as common
+    DataTables selectors. Returns True if an option was successfully selected.
     """
     selectors = [
+        'select.form-select-sm',
+        'select.form-select',
+        f'select:has(option[value="{target}"])',
         'select[name$="_length"]',
         '.dataTables_length select',
-        'select:has(option[value="20"])',
-        'select:has(option:has-text("20"))',
     ]
     for sel in selectors:
         select = page.locator(sel).first
         try:
             if select.count() == 0:
                 continue
-            # DataTables length menus usually use numeric values/labels.
+            # Try selecting by value first, then by visible label.
             try:
                 select.select_option(str(target))
             except Exception:
