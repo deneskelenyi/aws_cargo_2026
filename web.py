@@ -19,6 +19,7 @@ Examples:
 """
 import os
 import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -113,6 +114,14 @@ HTML = """
   {% endif %}
 
   <h2>Packages</h2>
+  {% if hidden_count > 0 %}
+    <p class="muted">
+      {{ hidden_count }} delivered package(s) older than 1 week hidden.
+      <a href="{{ url_for('index', show_all=1) if not show_all else url_for('index') }}">
+        {{ "Hide past items" if show_all else "See past items" }}
+      </a>
+    </p>
+  {% endif %}
   {% if packages %}
     <table>
       <thead>
@@ -172,6 +181,30 @@ def _parse_items_text(text: str) -> list[tuple[str, str]]:
     return results
 
 
+def _is_old_delivered(pkg: dict) -> bool:
+    """Return True if a package is Delivered and older than one week."""
+    status = (pkg.get("status") or "").lower()
+    if status != "delivered":
+        return False
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+
+    last_updated = (pkg.get("last_updated") or "").strip()
+    for fmt in ("%m/%d/%Y %I:%M %p", "%m/%d/%Y %H:%M", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(last_updated, fmt).replace(tzinfo=timezone.utc) < cutoff
+        except ValueError:
+            continue
+
+    try:
+        created = datetime.fromisoformat(pkg.get("created_at") or "")
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        return created < cutoff
+    except Exception:
+        return False
+
+
 @app.route("/", methods=["GET", "POST"])
 def index():
     if request.method == "POST":
@@ -196,10 +229,18 @@ def index():
             flash("No valid items found. Use the format '&lt;items&gt;: &lt;tracking&gt;'.", "error")
         return redirect(url_for("index"))
 
+    show_all = request.args.get("show_all") == "1"
+    packages = get_packages_with_items(db_name=DB_NAME)
+    hidden_count = sum(1 for p in packages if _is_old_delivered(p))
+    if not show_all:
+        packages = [p for p in packages if not _is_old_delivered(p)]
+
     return render_template_string(
         HTML,
         items=get_items(db_name=DB_NAME),
-        packages=get_packages_with_items(db_name=DB_NAME),
+        packages=packages,
+        hidden_count=hidden_count,
+        show_all=show_all,
     )
 
 
