@@ -102,11 +102,7 @@ HTML = """
   <div class="filters">
     <div>
       <label for="filter_search">Search items or tracking</label>
-      <input list="search_options" id="filter_search" placeholder="Type to filter items or tracking numbers...">
-      <datalist id="search_options">
-        {% for t in all_trackings %}<option value="{{ t }}">{% endfor %}
-        {% for n in all_names %}<option value="{{ n }}">{% endfor %}
-      </datalist>
+      <input type="text" id="filter_search" placeholder="Type to filter items or tracking numbers...">
     </div>
   </div>
 
@@ -367,8 +363,6 @@ def index():
     return render_template_string(
         HTML,
         all_items=all_items,
-        all_trackings=sorted({it["tracking"] for it in all_items}),
-        all_names=sorted({it["name"] for it in all_items}),
         packages=packages,
         hidden_count=hidden_count,
         show_all=show_all,
