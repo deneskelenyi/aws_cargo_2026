@@ -21,6 +21,7 @@ import os
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import urlencode
 
 from dotenv import load_dotenv
 from flask import Flask, redirect, render_template_string, request, url_for
@@ -66,9 +67,17 @@ HTML = """
     table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
     th, td { text-align: left; padding: 0.5rem; border-bottom: 1px solid #ccc; }
     th { font-weight: 600; }
+    th.sortable { cursor: pointer; user-select: none; }
+    th.sortable:hover { background: #f0f0f0; }
+    th .arrow { margin-left: 0.25rem; }
     .muted { color: #777; }
     .badge { display: inline-block; background: #e0e0e0; border-radius: 999px; padding: 0.15rem 0.5rem; margin: 0.1rem; font-size: 0.85rem; }
     form.inline { display: inline; }
+    .filters { display: flex; gap: 1rem; flex-wrap: wrap; align-items: end; margin-top: 1rem; }
+    .filters label { display: block; font-size: 0.85rem; margin-bottom: 0.25rem; }
+    .filters input { padding: 0.4rem; font-size: 1rem; min-width: 200px; }
+    .filters button { padding: 0.5rem 1rem; }
+    .filter-summary { margin-top: 0.5rem; font-size: 0.9rem; }
   </style>
 </head>
 <body>
@@ -91,9 +100,40 @@ HTML = """
   {% endwith %}
 
   <h2>Linked items</h2>
+
+  <form method="get" action="{{ url_for('index') }}" class="filters">
+    {% if show_all %}<input type="hidden" name="show_all" value="1">{% endif %}
+    {% if sort_by %}<input type="hidden" name="sort_items_by" value="{{ sort_by }}">{% endif %}
+    {% if sort_dir %}<input type="hidden" name="sort_items_dir" value="{{ sort_dir }}">{% endif %}
+    <div>
+      <label for="filter_tracking">Tracking</label>
+      <input list="tracking_options" id="filter_tracking" name="filter_tracking" value="{{ filter_tracking }}" placeholder="Filter tracking...">
+      <datalist id="tracking_options">
+        {% for t in all_trackings %}<option value="{{ t }}">{% endfor %}
+      </datalist>
+    </div>
+    <div>
+      <label for="filter_name">Item name</label>
+      <input list="name_options" id="filter_name" name="filter_name" value="{{ filter_name }}" placeholder="Filter item name...">
+      <datalist id="name_options">
+        {% for n in all_names %}<option value="{{ n }}">{% endfor %}
+      </datalist>
+    </div>
+    <button type="submit">Filter</button>
+    <a href="{{ url_for('index', **base_params) }}">Clear filters</a>
+  </form>
+
   {% if items %}
+    <p class="filter-summary">Showing {{ items|length }} item(s).</p>
     <table>
-      <thead><tr><th>Item</th><th>Tracking</th><th>Added</th><th></th></tr></thead>
+      <thead>
+        <tr>
+          <th class="sortable" onclick="window.location='{{ sort_url('item') }}'">Item{{ sort_arrow('item') }}</th>
+          <th class="sortable" onclick="window.location='{{ sort_url('tracking') }}'">Tracking{{ sort_arrow('tracking') }}</th>
+          <th class="sortable" onclick="window.location='{{ sort_url('added') }}'">Added{{ sort_arrow('added') }}</th>
+          <th></th>
+        </tr>
+      </thead>
       <tbody>
         {% for item in items %}
         <tr>
@@ -110,7 +150,7 @@ HTML = """
       </tbody>
     </table>
   {% else %}
-    <p class="muted">No items linked yet.</p>
+    <p class="muted">No items linked yet{% if filter_tracking or filter_name %} matching your filters{% endif %}.</p>
   {% endif %}
 
   <h2>Packages</h2>
@@ -232,6 +272,58 @@ def _package_sort_key(pkg: dict):
     return (not active, dt)
 
 
+def _filter_items(
+    items: list[dict],
+    filter_tracking: str,
+    filter_name: str,
+) -> list[dict]:
+    """Return items whose tracking and/or name contain the filter substrings."""
+    ft = filter_tracking.lower().strip()
+    fn = filter_name.lower().strip()
+    result = items
+    if ft:
+        result = [it for it in result if ft in it["tracking"].lower()]
+    if fn:
+        result = [it for it in result if fn in it["name"].lower()]
+    return result
+
+
+def _sort_items(
+    items: list[dict],
+    sort_by: str,
+    sort_dir: str,
+) -> list[dict]:
+    """Sort items by the selected column and direction."""
+    reverse = sort_dir == "desc"
+    if sort_by == "item":
+        key = lambda it: it["name"].lower()
+    elif sort_by == "tracking":
+        key = lambda it: it["tracking"].lower()
+    elif sort_by == "added":
+        key = lambda it: it["created_at"] or ""
+    else:
+        # Default: item name ascending
+        sort_by = "item"
+        key = lambda it: it["name"].lower()
+    return sorted(items, key=key, reverse=reverse)
+
+
+def _build_sort_url(
+    base_params: dict,
+    current_by: str,
+    current_dir: str,
+    column: str,
+) -> str:
+    """Toggle sort direction when clicking the same column."""
+    params = dict(base_params)
+    if current_by == column:
+        params["sort_items_dir"] = "desc" if current_dir == "asc" else "asc"
+    else:
+        params["sort_items_by"] = column
+        params["sort_items_dir"] = "asc"
+    return f"{url_for('index')}?{urlencode(params)}"
+
+
 @app.route("/", methods=["GET", "POST"])
 def index():
     if request.method == "POST":
@@ -256,19 +348,65 @@ def index():
             flash("No valid items found. Use the format '&lt;items&gt;: &lt;tracking&gt;'.", "error")
         return redirect(url_for("index"))
 
+    # Read query params.
     show_all = request.args.get("show_all") == "1"
+    filter_tracking = (request.args.get("filter_tracking") or "").strip()
+    filter_name = (request.args.get("filter_name") or "").strip()
+    sort_by = request.args.get("sort_items_by", "item").strip() or "item"
+    sort_dir = request.args.get("sort_items_dir", "asc").strip() or "asc"
+    if sort_dir not in ("asc", "desc"):
+        sort_dir = "asc"
+
+    # Packages section.
     packages = get_packages_with_items(db_name=DB_NAME)
     hidden_count = sum(1 for p in packages if _is_old_delivered(p))
     if not show_all:
         packages = [p for p in packages if not _is_old_delivered(p)]
     packages.sort(key=_package_sort_key)
 
+    # Items section.
+    all_items = get_items(db_name=DB_NAME)
+    filtered_items = _filter_items(all_items, filter_tracking, filter_name)
+    filtered_items = _sort_items(filtered_items, sort_by, sort_dir)
+
+    # Base params for links (preserve show_all, omit filters/sort for clear link).
+    base_params = {}
+    if show_all:
+        base_params["show_all"] = "1"
+
+    # Params for sort links (preserve filters and show_all).
+    sort_base_params = {}
+    if show_all:
+        sort_base_params["show_all"] = "1"
+    if filter_tracking:
+        sort_base_params["filter_tracking"] = filter_tracking
+    if filter_name:
+        sort_base_params["filter_name"] = filter_name
+
+    def sort_url(column: str) -> str:
+        return _build_sort_url(sort_base_params, sort_by, sort_dir, column)
+
+    def sort_arrow(column: str) -> str:
+        if sort_by == column:
+            return " ▲" if sort_dir == "asc" else " ▼"
+        return ""
+
     return render_template_string(
         HTML,
-        items=get_items(db_name=DB_NAME),
+        items=filtered_items,
+        all_items=all_items,
+        all_trackings=sorted({it["tracking"] for it in all_items}),
+        all_names=sorted({it["name"] for it in all_items}),
         packages=packages,
         hidden_count=hidden_count,
         show_all=show_all,
+        filter_tracking=filter_tracking,
+        filter_name=filter_name,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        base_params=base_params,
+        sort_url=sort_url,
+        sort_arrow=sort_arrow,
     )
 
 
