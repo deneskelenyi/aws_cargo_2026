@@ -41,7 +41,7 @@ from db import (
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "change-me-in-production")
-DB_NAME = os.getenv("DB_NAME", "packages.db").strip() or "packages.db"
+DB_NAME = os.getenv("DB_NAME", "").strip() or str(_SCRIPT_DIR / "packages.db")
 
 # Ensure the database schema exists before the first request.
 init_db(DB_NAME)

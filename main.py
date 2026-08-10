@@ -64,7 +64,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    db_name = os.getenv("DB_NAME", "packages.db").strip() or "packages.db"
+    db_name = os.getenv("DB_NAME", "").strip() or str(_SCRIPT_DIR / "packages.db")
 
     # Ensure database exists.
     init_db(db_name)
