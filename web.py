@@ -205,6 +205,33 @@ def _is_old_delivered(pkg: dict) -> bool:
         return False
 
 
+def _package_sort_key(pkg: dict):
+    """
+    Sort active statuses ('On the Way', 'Ready for Pickup') first,
+    then everything else by date ascending (oldest first).
+    """
+    status = (pkg.get("status") or "").lower()
+    active = status in ("on the way", "ready for pickup")
+
+    date_str = (pkg.get("last_updated") or "").strip()
+    for fmt in ("%m/%d/%Y %I:%M %p", "%m/%d/%Y %H:%M", "%Y-%m-%d %H:%M:%S"):
+        try:
+            dt = datetime.strptime(date_str, fmt).replace(tzinfo=timezone.utc)
+            break
+        except ValueError:
+            continue
+    else:
+        try:
+            dt = datetime.fromisoformat(pkg.get("created_at") or "")
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+        except Exception:
+            dt = datetime.max.replace(tzinfo=timezone.utc)
+
+    # active first (False < True), then date ascending
+    return (not active, dt)
+
+
 @app.route("/", methods=["GET", "POST"])
 def index():
     if request.method == "POST":
@@ -234,6 +261,7 @@ def index():
     hidden_count = sum(1 for p in packages if _is_old_delivered(p))
     if not show_all:
         packages = [p for p in packages if not _is_old_delivered(p)]
+    packages.sort(key=_package_sort_key)
 
     return render_template_string(
         HTML,
