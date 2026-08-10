@@ -101,16 +101,10 @@ HTML = """
 
   <div class="filters">
     <div>
-      <label for="filter_tracking">Tracking</label>
-      <input list="tracking_options" id="filter_tracking" placeholder="Filter tracking...">
-      <datalist id="tracking_options">
+      <label for="filter_search">Search items or tracking</label>
+      <input list="search_options" id="filter_search" placeholder="Type to filter items or tracking numbers...">
+      <datalist id="search_options">
         {% for t in all_trackings %}<option value="{{ t }}">{% endfor %}
-      </datalist>
-    </div>
-    <div>
-      <label for="filter_name">Item name</label>
-      <input list="name_options" id="filter_name" placeholder="Filter item name...">
-      <datalist id="name_options">
         {% for n in all_names %}<option value="{{ n }}">{% endfor %}
       </datalist>
     </div>
@@ -193,13 +187,13 @@ HTML = """
     }
 
     function renderItems() {
-      const ft = document.getElementById('filter_tracking').value.trim().toLowerCase();
-      const fn = document.getElementById('filter_name').value.trim().toLowerCase();
+      const query = document.getElementById('filter_search').value.trim().toLowerCase();
 
       let filtered = allItems.filter(item => {
-        const trackingMatch = !ft || (item.tracking || '').toLowerCase().includes(ft);
-        const nameMatch = !fn || (item.name || '').toLowerCase().includes(fn);
-        return trackingMatch && nameMatch;
+        if (!query) return true;
+        const trackingMatch = (item.tracking || '').toLowerCase().includes(query);
+        const nameMatch = (item.name || '').toLowerCase().includes(query);
+        return trackingMatch || nameMatch;
       });
 
       filtered = sortItems(filtered);
@@ -234,8 +228,7 @@ HTML = """
       });
     }
 
-    document.getElementById('filter_tracking').addEventListener('input', renderItems);
-    document.getElementById('filter_name').addEventListener('input', renderItems);
+    document.getElementById('filter_search').addEventListener('input', renderItems);
 
     document.querySelectorAll('th.sortable').forEach(th => {
       th.addEventListener('click', () => {
