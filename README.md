@@ -84,3 +84,7 @@ Alerts are sent through every channel that is configured in `.env`:
 - **Telegram**: set `WEBHOOK_HOST`, `WEBHOOK_PATH`, `SEND_API_KEY`, and `TELEGRAM_RECIPIENT`.
 
 If both are configured, each alert is sent to both.
+
+## Tracking-number matching
+
+Item names are matched to scraped tracking numbers using a two-way substring lookup. If you enter `ABCD12345` and the site lists `CD123`, it matches. Likewise, if the site lists `XXXABCD12345YYZ`, it also matches.

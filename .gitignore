@@ -20,6 +20,10 @@ telegram_sender_test.py
 packages_page.html
 packages_page.png
 
+# Runtime logs
+cron.log
+*.log
+
 # Server runtime files
 web.log
 web.pid

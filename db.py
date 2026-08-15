@@ -227,7 +227,13 @@ def get_items(db_name: Optional[str] = None) -> list[dict[str, Any]]:
 def get_item_names_for_tracking(
     tracking: str, db_name: Optional[str] = None
 ) -> list[str]:
-    """Return all friendly item names associated with a tracking number."""
+    """
+    Return all friendly item names associated with a tracking number.
+
+    Matching is two-way substring: a stored item tracking matches the scraped
+    tracking if either string contains the other. This handles vendors that
+    provide a longer tracking number than the site shows, and vice versa.
+    """
     tracking = (tracking or "").strip()
     if not tracking:
         return []
@@ -236,10 +242,11 @@ def get_item_names_for_tracking(
         cursor = conn.execute(
             """
             SELECT name FROM items
-            WHERE tracking = ?
+            WHERE ? LIKE '%' || tracking || '%'
+               OR tracking LIKE '%' || ? || '%'
             ORDER BY name COLLATE NOCASE
             """,
-            (tracking,),
+            (tracking, tracking),
         )
         return [row["name"] for row in cursor.fetchall()]
 
