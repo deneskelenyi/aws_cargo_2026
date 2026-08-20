@@ -40,6 +40,29 @@ python3 web.py
 
 Then open `http://<host>:5000`.
 
+### Running the web UI with systemd (with auto-reload)
+
+A user service is included in `systemd/aws-alerts-web.service`. It uses `watchdog` to restart the server automatically whenever a `.py` file changes, so the web UI always runs the latest code.
+
+```bash
+# Install the user service
+mkdir -p ~/.config/systemd/user
+cp systemd/aws-alerts-web.service ~/.config/systemd/user/
+
+systemctl --user daemon-reload
+systemctl --user enable --now aws-alerts-web.service
+
+# View logs
+systemctl --user status aws-alerts-web.service
+journalctl --user -u aws-alerts-web.service -f
+```
+
+To make the user service start at boot (before you log in):
+
+```bash
+sudo loginctl enable-linger $USER
+```
+
 Enter tracking items one per line using the format:
 
 ```text

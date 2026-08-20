@@ -1,0 +1,18 @@
+[Unit]
+Description=AWS Cargo Tracker Web UI
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/hermes/aws_alerts
+Environment=PYTHONUNBUFFERED=1
+# watchdog auto-restarts web.py whenever any *.py file in the project changes.
+ExecStart=/home/hermes/aws_alerts/venv/bin/watchmedo auto-restart \
+    --directory=/home/hermes/aws_alerts \
+    --pattern="*.py" \
+    --recursive \
+    -- /home/hermes/aws_alerts/venv/bin/python /home/hermes/aws_alerts/web.py
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

@@ -2,3 +2,4 @@ python-dotenv>=1.0
 playwright>=1.59
 requests>=2.33
 Flask>=3.0
+watchdog>=3.0
