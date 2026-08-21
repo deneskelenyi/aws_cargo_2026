@@ -72,9 +72,13 @@ HTML = """
     .muted { color: #777; }
     .badge { display: inline-block; background: #e0e0e0; border-radius: 999px; padding: 0.15rem 0.5rem; margin: 0.1rem; font-size: 0.85rem; }
     form.inline { display: inline; }
-    .filters { display: flex; gap: 1rem; flex-wrap: wrap; align-items: end; margin-top: 1rem; }
-    .filters label { display: block; font-size: 0.85rem; margin-bottom: 0.25rem; }
-    .filters input { padding: 0.4rem; font-size: 1rem; min-width: 200px; }
+    .filters { display: flex; gap: 1.5rem; flex-wrap: wrap; align-items: end; margin-top: 1rem; }
+    .filters > div > label { display: block; font-size: 0.85rem; margin-bottom: 0.25rem; font-weight: 600; }
+    .filters input[type="text"] { padding: 0.4rem; font-size: 1rem; min-width: 220px; }
+    .filter-group { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; }
+    .filter-group > span { font-size: 0.85rem; font-weight: 600; margin-right: 0.25rem; }
+    .radio-label { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.9rem; font-weight: normal; cursor: pointer; }
+    .radio-label input { min-width: auto; margin: 0; }
     .filter-summary { margin-top: 0.5rem; font-size: 0.9rem; }
   </style>
 </head>
@@ -141,13 +145,13 @@ HTML = """
       <label for="filter_search">Search items or tracking</label>
       <input type="text" id="filter_search" placeholder="Type to filter items or tracking numbers...">
     </div>
-    <div>
-      <label>Show</label>
-      <label style="display:inline; font-weight:normal; margin-right: 0.75rem;">
-        <input type="radio" name="hide_linked" value="0" checked> All items
+    <div class="filter-group">
+      <span>Show</span>
+      <label class="radio-label">
+        <input type="radio" name="hide_linked" value="0"> All items
       </label>
-      <label style="display:inline; font-weight:normal;">
-        <input type="radio" name="hide_linked" value="1"> Hide already scraped
+      <label class="radio-label">
+        <input type="radio" name="hide_linked" value="1" checked> Hide already scraped
       </label>
     </div>
   </div>
