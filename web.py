@@ -144,10 +144,10 @@ HTML = """
     <div>
       <label>Show</label>
       <label style="display:inline; font-weight:normal; margin-right: 0.75rem;">
-        <input type="radio" name="hide_linked" value="1" checked> Hide already scraped
+        <input type="radio" name="hide_linked" value="0" checked> All items
       </label>
       <label style="display:inline; font-weight:normal;">
-        <input type="radio" name="hide_linked" value="0"> Show all
+        <input type="radio" name="hide_linked" value="1"> Hide already scraped
       </label>
     </div>
   </div>
