@@ -144,7 +144,7 @@ HTML = """
     <div>
       <label>Show</label>
       <label style="display:inline; font-weight:normal; margin-right: 0.75rem;">
-        <input type="radio" name="hide_linked" value="1" checked> Hide already linked
+        <input type="radio" name="hide_linked" value="1" checked> Hide already scraped
       </label>
       <label style="display:inline; font-weight:normal;">
         <input type="radio" name="hide_linked" value="0"> Show all
@@ -319,7 +319,7 @@ def _is_old_delivered(pkg: dict) -> bool:
 
 def _item_is_linked(item: dict, packages: list[dict]) -> bool:
     """
-    Return True if the item's tracking matches a package that already has a status.
+    Return True if the item's tracking matches any scraped package.
     Matching uses the same two-way substring rule as the notifier.
     """
     item_tracking = (item.get("tracking") or "").strip()
@@ -331,8 +331,7 @@ def _item_is_linked(item: dict, packages: list[dict]) -> bool:
         if not pkg_tracking:
             continue
         if item_tracking in pkg_tracking or pkg_tracking in item_tracking:
-            if pkg.get("status"):
-                return True
+            return True
     return False
 
 
@@ -389,17 +388,18 @@ def index():
 
     show_all = request.args.get("show_all") == "1"
 
-    # Packages section.
-    packages = get_packages_with_items(db_name=DB_NAME)
-    hidden_count = sum(1 for p in packages if _is_old_delivered(p))
-    if not show_all:
-        packages = [p for p in packages if not _is_old_delivered(p)]
-    packages.sort(key=_package_sort_key)
+    # Fetch all packages first so item linkage is computed from the full set.
+    all_packages = get_packages_with_items(db_name=DB_NAME)
+    hidden_count = sum(1 for p in all_packages if _is_old_delivered(p))
 
     # Items section — rendered client-side from JSON.
     all_items = get_items(db_name=DB_NAME)
     for item in all_items:
-        item["is_linked"] = _item_is_linked(item, packages)
+        item["is_linked"] = _item_is_linked(item, all_packages)
+
+    # Packages section (displayed, possibly filtered).
+    packages = all_packages if show_all else [p for p in all_packages if not _is_old_delivered(p)]
+    packages.sort(key=_package_sort_key)
 
     return render_template_string(
         HTML,
