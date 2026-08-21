@@ -97,30 +97,6 @@ HTML = """
     {% endif %}
   {% endwith %}
 
-  <h2>Linked items</h2>
-
-  <div class="filters">
-    <div>
-      <label for="filter_search">Search items or tracking</label>
-      <input type="text" id="filter_search" placeholder="Type to filter items or tracking numbers...">
-    </div>
-  </div>
-
-  <p class="filter-summary" id="items-summary"></p>
-
-  <table>
-    <thead>
-      <tr>
-        <th class="sortable" data-col="name">Item<span class="arrow"></span></th>
-        <th class="sortable" data-col="tracking">Tracking<span class="arrow"></span></th>
-        <th class="sortable" data-col="created_at">Added<span class="arrow"></span></th>
-        <th></th>
-      </tr>
-    </thead>
-    <tbody id="items-body">
-    </tbody>
-  </table>
-
   <h2>Packages</h2>
   {% if hidden_count > 0 %}
     <p class="muted">
@@ -158,6 +134,39 @@ HTML = """
     <p class="muted">No packages in the database yet. Run <code>python main.py</code> to scrape.</p>
   {% endif %}
 
+  <h2>Linked items</h2>
+
+  <div class="filters">
+    <div>
+      <label for="filter_search">Search items or tracking</label>
+      <input type="text" id="filter_search" placeholder="Type to filter items or tracking numbers...">
+    </div>
+    <div>
+      <label>Show</label>
+      <label style="display:inline; font-weight:normal; margin-right: 0.75rem;">
+        <input type="radio" name="hide_linked" value="1" checked> Hide already linked
+      </label>
+      <label style="display:inline; font-weight:normal;">
+        <input type="radio" name="hide_linked" value="0"> Show all
+      </label>
+    </div>
+  </div>
+
+  <p class="filter-summary" id="items-summary"></p>
+
+  <table>
+    <thead>
+      <tr>
+        <th class="sortable" data-col="name">Item<span class="arrow"></span></th>
+        <th class="sortable" data-col="tracking">Tracking<span class="arrow"></span></th>
+        <th class="sortable" data-col="created_at">Added<span class="arrow"></span></th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody id="items-body">
+    </tbody>
+  </table>
+
   <script>
     const allItems = {{ all_items | tojson }};
     let sortCol = 'name';
@@ -184,8 +193,10 @@ HTML = """
 
     function renderItems() {
       const query = document.getElementById('filter_search').value.trim().toLowerCase();
+      const hideLinked = document.querySelector('input[name="hide_linked"]:checked').value === "1";
 
       let filtered = allItems.filter(item => {
+        if (hideLinked && item.is_linked) return false;
         if (!query) return true;
         const trackingMatch = (item.tracking || '').toLowerCase().includes(query);
         const nameMatch = (item.name || '').toLowerCase().includes(query);
@@ -208,10 +219,15 @@ HTML = """
         </tr>
       `).join('');
 
+      const hiddenLinked = allItems.filter(item => item.is_linked).length;
       const summary = document.getElementById('items-summary');
-      summary.textContent = filtered.length === allItems.length
-        ? `Showing ${filtered.length} item(s).`
-        : `Showing ${filtered.length} of ${allItems.length} item(s).`;
+      let text = `Showing ${filtered.length} item(s).`;
+      if (allItems.length !== filtered.length) {
+        text += ` ${allItems.length - filtered.length} hidden.`;
+      } else if (hideLinked && hiddenLinked > 0) {
+        text += ` ${hiddenLinked} already-linked item(s) hidden.`;
+      }
+      summary.textContent = text;
 
       document.querySelectorAll('th.sortable').forEach(th => {
         const col = th.dataset.col;
@@ -225,6 +241,10 @@ HTML = """
     }
 
     document.getElementById('filter_search').addEventListener('input', renderItems);
+
+    document.querySelectorAll('input[name="hide_linked"]').forEach(radio => {
+      radio.addEventListener('change', renderItems);
+    });
 
     document.querySelectorAll('th.sortable').forEach(th => {
       th.addEventListener('click', () => {
@@ -297,6 +317,25 @@ def _is_old_delivered(pkg: dict) -> bool:
         return False
 
 
+def _item_is_linked(item: dict, packages: list[dict]) -> bool:
+    """
+    Return True if the item's tracking matches a package that already has a status.
+    Matching uses the same two-way substring rule as the notifier.
+    """
+    item_tracking = (item.get("tracking") or "").strip()
+    if not item_tracking:
+        return False
+
+    for pkg in packages:
+        pkg_tracking = (pkg.get("tracking") or "").strip()
+        if not pkg_tracking:
+            continue
+        if item_tracking in pkg_tracking or pkg_tracking in item_tracking:
+            if pkg.get("status"):
+                return True
+    return False
+
+
 def _package_sort_key(pkg: dict):
     """
     Sort active statuses ('On the Way', 'Ready for Pickup') first,
@@ -359,6 +398,8 @@ def index():
 
     # Items section — rendered client-side from JSON.
     all_items = get_items(db_name=DB_NAME)
+    for item in all_items:
+        item["is_linked"] = _item_is_linked(item, packages)
 
     return render_template_string(
         HTML,
