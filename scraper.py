@@ -56,21 +56,38 @@ def _set_rows_per_page(page: Any, target: int = ROWS_PER_PAGE) -> bool:
 
 
 def _extract_rows(page: Any) -> List[dict]:
-    """Extract package rows from the current page's table."""
+    """
+    Extract package rows from the current page's table.
+
+    The site added a "Type" column (e.g. "Air Courier") after the tracking
+    number, so there are two layouts:
+        6+ cells: tracking, type, description, price, status, last_updated
+        5 cells:  tracking, description, price, status, last_updated
+    The type column is ignored.
+    """
     return page.evaluate("""
         () => {
             const trs = document.querySelectorAll('table tbody tr');
             const data = [];
             for (const tr of trs) {
                 const cells = tr.querySelectorAll('td');
-                if (cells.length < 5) continue;
-                data.push({
-                    tracking:    cells[0]?.innerText?.trim() || '',
-                    description: cells[1]?.innerText?.trim() || '',
-                    price:       cells[2]?.innerText?.trim() || '',
-                    status:      cells[3]?.innerText?.trim() || '',
-                    last_updated: cells[4]?.innerText?.trim() || ''
-                });
+                if (cells.length >= 6) {
+                    data.push({
+                        tracking:    cells[0]?.innerText?.trim() || '',
+                        description: cells[2]?.innerText?.trim() || '',
+                        price:       cells[3]?.innerText?.trim() || '',
+                        status:      cells[4]?.innerText?.trim() || '',
+                        last_updated: cells[5]?.innerText?.trim() || ''
+                    });
+                } else if (cells.length >= 5) {
+                    data.push({
+                        tracking:    cells[0]?.innerText?.trim() || '',
+                        description: cells[1]?.innerText?.trim() || '',
+                        price:       cells[2]?.innerText?.trim() || '',
+                        status:      cells[3]?.innerText?.trim() || '',
+                        last_updated: cells[4]?.innerText?.trim() || ''
+                    });
+                }
             }
             return data;
         }
