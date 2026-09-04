@@ -11,9 +11,14 @@ Anti-detection notes:
   through it for better stealth. Otherwise, normal Chromium is used.
 - We set a realistic viewport and disable automation flags when using vanilla
   Chromium so we don't trip simple JS checks.
+
+Retries:
+- Login occasionally times out. Each scrape is attempted up to MAX_RETRIES
+  times with a fresh browser session and a pause between attempts.
 """
 import os
 import json
+import time
 from typing import Any, List, Optional
 from playwright.sync_api import sync_playwright
 
@@ -21,6 +26,8 @@ LOGIN_URL     = "https://www.awscargo.com/login"
 PACKAGES_URL  = "https://www.awscargo.com/en/account/packages"
 DEFAULT_TIMEOUT = 15000  # ms
 ROWS_PER_PAGE = 25       # try to show this many rows before extracting
+MAX_RETRIES   = 3        # scrape attempts per run
+RETRY_DELAY_S = 20       # pause between attempts
 
 
 def _set_rows_per_page(page: Any, target: int = ROWS_PER_PAGE) -> bool:
@@ -130,23 +137,10 @@ def _make_browser(p: Any) -> Any:
     return p.chromium.launch(headless=True, args=args)
 
 
-def scrape_packages(
-    username: Optional[str] = None,
-    password: Optional[str] = None,
-) -> List[dict]:
-    """
-    Scrape the packages table from AWS Cargo.
-
-    Returns list of dicts with keys:
-        tracking, description, price, status, last_updated
-    """
-    username = username or os.getenv("AWS_USERNAME", "").strip()
-    password = password or os.getenv("AWS_PASSWORD", "").strip()
-    if not username or not password:
-        raise ValueError("AWS_USERNAME and AWS_PASSWORD must be set in .env or passed as args")
-
-    with sync_playwright() as p:
-        browser = _make_browser(p)
+def _scrape_once(p: Any, username: str, password: str) -> List[dict]:
+    """Single scrape attempt with a fresh browser session."""
+    browser = _make_browser(p)
+    try:
         context = browser.new_context(
             viewport={"width": 1280, "height": 720},
             user_agent=(
@@ -188,7 +182,6 @@ def scrape_packages(
         except Exception:
             page.wait_for_selector("text=No records to display", timeout=5000)
             print("[scraper] No records to display.")
-            browser.close()
             return []
 
         # Try to show more rows per page before extracting (default is often 10).
@@ -201,7 +194,41 @@ def scrape_packages(
                 pass
 
         rows = _extract_rows(page)
-
-        browser.close()
         print(f"[scraper] Scraped {len(rows)} packages.")
         return rows
+    finally:
+        browser.close()
+
+
+def scrape_packages(
+    username: Optional[str] = None,
+    password: Optional[str] = None,
+    max_retries: int = MAX_RETRIES,
+) -> List[dict]:
+    """
+    Scrape the packages table from AWS Cargo, retrying on transient failures
+    (e.g. login timeouts). Each attempt uses a fresh browser session.
+
+    Returns list of dicts with keys:
+        tracking, description, price, status, last_updated
+    """
+    username = username or os.getenv("AWS_USERNAME", "").strip()
+    password = password or os.getenv("AWS_PASSWORD", "").strip()
+    if not username or not password:
+        raise ValueError("AWS_USERNAME and AWS_PASSWORD must be set in .env or passed as args")
+
+    last_exc: Optional[Exception] = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            if attempt > 1:
+                print(f"[scraper] Attempt {attempt}/{max_retries} (waiting {RETRY_DELAY_S}s)...")
+                time.sleep(RETRY_DELAY_S)
+            with sync_playwright() as p:
+                return _scrape_once(p, username, password)
+        except Exception as exc:
+            last_exc = exc
+            print(f"[scraper] Attempt {attempt}/{max_retries} failed: {exc}")
+
+    raise RuntimeError(
+        f"Scraping failed after {max_retries} attempts. Last error: {last_exc}"
+    ) from last_exc
