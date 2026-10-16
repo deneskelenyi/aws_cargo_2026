@@ -82,7 +82,8 @@ HTML = """
     .radio-label { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.9rem; font-weight: normal; cursor: pointer; }
     .radio-label input { min-width: auto; margin: 0; }
     .filter-summary { margin-top: 0.5rem; font-size: 0.9rem; }
-    tr.ext-row td { background: #fff8e1; }
+    tr.ext-row td { background: #fff8e1; color: #333; }
+    tr.ext-row td .muted { color: #666; }
     tr.ext-row td:first-child { border-left: 4px solid #f9a825; }
     .ext-status { color: #b26a00; font-weight: 600; }
     .ext-link { background: none; border: none; color: #1565c0; cursor: pointer; font-size: inherit; padding: 0; text-decoration: underline; }
