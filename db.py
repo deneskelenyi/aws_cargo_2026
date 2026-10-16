@@ -20,13 +20,14 @@ Schema:
         UNIQUE(name, tracking)
 
     external_tracking
-        id            INTEGER PRIMARY KEY AUTOINCREMENT
-        tracking      TEXT UNIQUE NOT NULL      -- tracking number from the items table
-        status        TEXT                       -- latest status code from the public API
-        status_label  TEXT                       -- latest human-readable status label
-        last_updated  TEXT                       -- timestamp of the latest event (ISO)
-        events        TEXT                       -- full event history as JSON
-        created_at    TEXT DEFAULT (datetime('now'))
+        id                INTEGER PRIMARY KEY AUTOINCREMENT
+        tracking          TEXT UNIQUE NOT NULL  -- tracking number from the items table
+        status            TEXT                   -- latest status code from the public API
+        status_label      TEXT                   -- latest human-readable status label
+        last_updated      TEXT                   -- timestamp of the latest event (ISO)
+        events            TEXT                   -- full event history as JSON
+        notified_status   TEXT                   -- status at last alert (NULL = never alerted)
+        created_at        TEXT DEFAULT (datetime('now'))
 
 Logic:
     * UPSERT via INSERT ... ON CONFLICT(tracking) DO UPDATE
@@ -94,9 +95,16 @@ def init_db(db_name: Optional[str] = None) -> None:
                 status_label  TEXT,
                 last_updated  TEXT,
                 events        TEXT,
+                notified_status TEXT,
                 created_at    TEXT DEFAULT (datetime('now'))
             )
         """)
+        # Migrate databases created before notified_status existed.
+        cols = [r["name"] for r in conn.execute("PRAGMA table_info(external_tracking)")]
+        if "notified_status" not in cols:
+            conn.execute(
+                "ALTER TABLE external_tracking ADD COLUMN notified_status TEXT"
+            )
         conn.commit()
 
 
@@ -368,3 +376,33 @@ def delete_external_tracking(tracking: str, db_name: Optional[str] = None) -> bo
         )
         conn.commit()
         return cursor.rowcount > 0
+
+
+def get_external_alert_pending(db_name: Optional[str] = None) -> list[dict[str, Any]]:
+    """
+    Return external tracking rows whose status has never been alerted
+    (notified_status IS NULL) or whose status changed since the last alert.
+    """
+    with get_conn(db_name) as conn:
+        cursor = conn.execute(
+            """
+            SELECT * FROM external_tracking
+            WHERE notified_status IS NULL OR notified_status != status
+            ORDER BY last_updated ASC
+            """
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def mark_external_notified(tracking: str, db_name: Optional[str] = None) -> None:
+    """Record the current status as alerted for the given tracking number."""
+    with get_conn(db_name) as conn:
+        conn.execute(
+            """
+            UPDATE external_tracking
+            SET notified_status = status
+            WHERE tracking = ?
+            """,
+            (tracking,),
+        )
+        conn.commit()

@@ -103,6 +103,22 @@ def _format_message(pkg: dict, item_names: list[str]) -> str:
     return f"AWS Cargo – {tracking}\n" + "\n".join(lines)
 
 
+def _format_external_message(ext: dict, item_names: list[str]) -> str:
+    """Build the alert body for a public-tracking (pre-system) update."""
+    tracking = ext.get("tracking", "N/A")
+    status_label = ext.get("status_label") or ext.get("status") or "N/A"
+    last_updated = ext.get("last_updated") or "N/A"
+
+    lines = [
+        f"Status: {status_label}",
+        f"Since:  {last_updated}",
+    ]
+    if item_names:
+        lines.append(f"Items:  {', '.join(item_names)}")
+
+    return f"Public tracking – {tracking}\n" + "\n".join(lines)
+
+
 def _status_priority(status: Optional[str]) -> int:
     """Choose a Pushover priority based on the package status."""
     if not status:
@@ -146,6 +162,17 @@ def _build_blocks(
         tracking = pkg.get("tracking", "N/A")
         item_names = get_item_names_for_tracking(tracking, db_name)
         blocks.append(_format_message(pkg, item_names))
+    return blocks
+
+
+def _build_external_blocks(
+    external: list[dict], db_name: Optional[str]
+) -> list[str]:
+    """Convert external (public tracking) rows into formatted message blocks."""
+    blocks = []
+    for ext in external:
+        item_names = get_item_names_for_tracking(ext.get("tracking", ""), db_name)
+        blocks.append(_format_external_message(ext, item_names))
     return blocks
 
 
@@ -213,6 +240,7 @@ def send_consolidated_alert(
     *,
     use_aws_token: bool = False,
     db_name: Optional[str] = None,
+    external: Optional[list[dict]] = None,
 ) -> dict[str, Any]:
     """
     Send a single consolidated alert for all supplied packages.
@@ -222,18 +250,27 @@ def send_consolidated_alert(
         Pushover: {PUSHOVER_MSG_LIMIT} chars
         Telegram: {TELEGRAM_MSG_LIMIT} chars
 
+    If `external` (public-tracking rows) is given, those blocks are appended
+    after the package blocks in the same consolidated message.
+
     On any error the function raises; callers should therefore treat a
     consolidated run as all-or-nothing when marking packages as sent.
     """
-    if not packages:
+    external = external or []
+    if not packages and not external:
         return {"tracking_count": 0, "pushover": None, "telegram": None}
 
-    blocks = _build_blocks(packages, db_name)
+    blocks = _build_blocks(packages, db_name) + _build_external_blocks(external, db_name)
     count = len(packages)
-    header = f"AWS Cargo updates – {count} package{'s' if count != 1 else ''}"
+    ext_count = len(external)
+    total = count + ext_count
+    header = f"AWS Cargo updates – {total} update{'s' if total != 1 else ''}"
+    if count and ext_count:
+        header += f" ({count} package(s), {ext_count} public tracking)"
 
     results = {
         "tracking_count": count,
+        "external_count": ext_count,
         "pushover": None,
         "telegram": None,
     }
@@ -243,10 +280,9 @@ def send_consolidated_alert(
         try:
             chunks = _chunk_blocks(blocks, header, PUSHOVER_MSG_LIMIT)
             priority = max(
-                (_status_priority(pkg.get("status")) for pkg in packages),
-                default=0,
+                [_status_priority(pkg.get("status")) for pkg in packages] + [0],
             )
-            title = f"AWS Cargo – {count} update{'s' if count != 1 else ''}"
+            title = f"AWS Cargo – {total} update{'s' if total != 1 else ''}"
             responses = [
                 send_pushover_notification(
                     title=title,

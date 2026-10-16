@@ -44,6 +44,8 @@ from db import (
     get_unlinked_items,
     upsert_external_tracking,
     delete_external_tracking,
+    get_external_alert_pending,
+    mark_external_notified,
 )
 from external_tracker import fetch_tracking
 from scraper import scrape_packages
@@ -159,15 +161,22 @@ def main() -> None:
 
     # ── Phase 2: Notify unsent ─────────────────────────────────────────
     unsent = get_unsent_packages(db_name)
-    if not unsent:
-        print("[main] No unsent packages. Nothing to do.")
+    external_pending = get_external_alert_pending(db_name)
+    if not unsent and not external_pending:
+        print("[main] No unsent packages or external updates. Nothing to do.")
         return
 
-    print(f"[main] {len(unsent)} unsent package(s) to alert.")
-    for pkg in unsent:
-        tracking = pkg["tracking"]
-        status = pkg.get("status", "N/A")
-        print(f"  -> {tracking} [{status}]")
+    if unsent:
+        print(f"[main] {len(unsent)} unsent package(s) to alert.")
+        for pkg in unsent:
+            tracking = pkg["tracking"]
+            status = pkg.get("status", "N/A")
+            print(f"  -> {tracking} [{status}]")
+    if external_pending:
+        print(f"[main] {len(external_pending)} public tracking update(s) to alert.")
+        for ext in external_pending:
+            label = ext.get("status_label") or ext.get("status") or "N/A"
+            print(f"  -> {ext['tracking']} [{label}]")
 
     if args.dry_run:
         print("[main] (dry-run: not sending)")
@@ -183,20 +192,36 @@ def main() -> None:
                 print(f"    Alert sent for {tracking}.")
             except Exception as exc:
                 print(f"    Alert FAILED for {tracking}: {exc}")
+        # External updates always go out consolidated (they are secondary).
+        if external_pending:
+            try:
+                send_consolidated_alert(
+                    [], use_aws_token=args.aws_token, db_name=db_name,
+                    external=external_pending,
+                )
+                for ext in external_pending:
+                    mark_external_notified(ext["tracking"], db_name)
+                print(f"    External tracking alert sent for {len(external_pending)} update(s).")
+            except Exception as exc:
+                print(f"    External tracking alert FAILED: {exc}")
     else:
         try:
             result = send_consolidated_alert(
-                unsent, use_aws_token=args.aws_token, db_name=db_name
+                unsent, use_aws_token=args.aws_token, db_name=db_name,
+                external=external_pending,
             )
             for pkg in unsent:
                 mark_as_sent(pkg["tracking"], db_name)
+            for ext in external_pending:
+                mark_external_notified(ext["tracking"], db_name)
             chunks = []
             if result.get("pushover"):
                 chunks.append(f"Pushover {result['pushover']['chunks']} chunk(s)")
             if result.get("telegram"):
                 chunks.append(f"Telegram {result['telegram']['chunks']} chunk(s)")
             chunk_str = f" ({', '.join(chunks)})" if chunks else ""
-            print(f"[main] Consolidated alert sent for {len(unsent)} package(s){chunk_str}.")
+            total = len(unsent) + len(external_pending)
+            print(f"[main] Consolidated alert sent for {total} update(s){chunk_str}.")
         except Exception as exc:
             print(f"[main] Consolidated alert FAILED: {exc}")
 
