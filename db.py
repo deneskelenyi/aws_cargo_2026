@@ -19,12 +19,22 @@ Schema:
         created_at    TEXT DEFAULT (datetime('now'))
         UNIQUE(name, tracking)
 
+    external_tracking
+        id            INTEGER PRIMARY KEY AUTOINCREMENT
+        tracking      TEXT UNIQUE NOT NULL      -- tracking number from the items table
+        status        TEXT                       -- latest status code from the public API
+        status_label  TEXT                       -- latest human-readable status label
+        last_updated  TEXT                       -- timestamp of the latest event (ISO)
+        events        TEXT                       -- full event history as JSON
+        created_at    TEXT DEFAULT (datetime('now'))
+
 Logic:
     * UPSERT via INSERT ... ON CONFLICT(tracking) DO UPDATE
     * Rows with notified_at IS NULL are considered "pending notification"
     * When a previously-seen package gets a new status, notified_at is cleared
       automatically so the change triggers a fresh alert.
 """
+import json
 import sqlite3
 from typing import Any, Optional
 
@@ -75,6 +85,17 @@ def init_db(db_name: Optional[str] = None) -> None:
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_items_tracking
             ON items(tracking)
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS external_tracking (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                tracking      TEXT UNIQUE NOT NULL,
+                status        TEXT,
+                status_label  TEXT,
+                last_updated  TEXT,
+                events        TEXT,
+                created_at    TEXT DEFAULT (datetime('now'))
+            )
         """)
         conn.commit()
 
@@ -263,3 +284,87 @@ def get_packages_with_items(db_name: Optional[str] = None) -> list[dict[str, Any
             d["item_names"] = get_item_names_for_tracking(d["tracking"], db_name)
             result.append(d)
         return result
+
+
+# ---------------------------------------------------------------------------
+# External (public) tracking — items not yet visible in the internal system
+# ---------------------------------------------------------------------------
+
+
+def get_unlinked_items(db_name: Optional[str] = None) -> list[dict[str, Any]]:
+    """
+    Return items whose tracking number does not match any scraped package,
+    using the same two-way substring rule as get_item_names_for_tracking.
+    """
+    with get_conn(db_name) as conn:
+        cursor = conn.execute(
+            """
+            SELECT i.* FROM items i
+            WHERE NOT EXISTS (
+                SELECT 1 FROM packages p
+                WHERE i.tracking LIKE '%' || p.tracking || '%'
+                   OR p.tracking LIKE '%' || i.tracking || '%'
+            )
+            ORDER BY i.created_at ASC
+            """
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def upsert_external_tracking(
+    tracking: str,
+    status: Optional[str],
+    status_label: Optional[str],
+    last_updated: Optional[str],
+    events: Optional[str],
+    db_name: Optional[str] = None,
+) -> dict[str, Any]:
+    """Upsert a public-tracking result row. `events` is a JSON string."""
+    tracking = (tracking or "").strip()
+    if not tracking:
+        raise ValueError("tracking number cannot be empty")
+
+    with get_conn(db_name) as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO external_tracking (tracking, status, status_label, last_updated, events)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(tracking) DO UPDATE SET
+                status       = excluded.status,
+                status_label = excluded.status_label,
+                last_updated = excluded.last_updated,
+                events       = excluded.events
+            RETURNING *
+            """,
+            (tracking, status, status_label, last_updated, events),
+        )
+        row = cursor.fetchone()
+        conn.commit()
+        return dict(row)
+
+
+def get_external_trackings(db_name: Optional[str] = None) -> list[dict[str, Any]]:
+    """Return all external tracking rows with events parsed from JSON."""
+    with get_conn(db_name) as conn:
+        cursor = conn.execute(
+            "SELECT * FROM external_tracking ORDER BY last_updated DESC"
+        )
+        result = []
+        for row in cursor.fetchall():
+            d = dict(row)
+            try:
+                d["events"] = json.loads(d.get("events") or "[]")
+            except ValueError:
+                d["events"] = []
+            result.append(d)
+        return result
+
+
+def delete_external_tracking(tracking: str, db_name: Optional[str] = None) -> bool:
+    """Delete an external tracking row. Returns True if a row was removed."""
+    with get_conn(db_name) as conn:
+        cursor = conn.execute(
+            "DELETE FROM external_tracking WHERE tracking = ?", (tracking,)
+        )
+        conn.commit()
+        return cursor.rowcount > 0

@@ -21,6 +21,7 @@ import os
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 from flask import Flask, redirect, render_template_string, request, url_for
@@ -35,6 +36,7 @@ else:
 from db import (
     add_item,
     delete_item,
+    get_external_trackings,
     get_items,
     get_packages_with_items,
     init_db,
@@ -80,6 +82,16 @@ HTML = """
     .radio-label { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.9rem; font-weight: normal; cursor: pointer; }
     .radio-label input { min-width: auto; margin: 0; }
     .filter-summary { margin-top: 0.5rem; font-size: 0.9rem; }
+    tr.ext-row td { background: #fff8e1; }
+    tr.ext-row td:first-child { border-left: 4px solid #f9a825; }
+    .ext-status { color: #b26a00; font-weight: 600; }
+    .ext-link { background: none; border: none; color: #1565c0; cursor: pointer; font-size: inherit; padding: 0; text-decoration: underline; }
+    .modal-backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 10; align-items: center; justify-content: center; }
+    .modal-backdrop.open { display: flex; }
+    .modal { background: #fff; color: #222; max-width: 560px; width: 92%; max-height: 80vh; overflow: auto; border-radius: 8px; padding: 1.25rem; }
+    .modal h3 { margin-top: 0; }
+    .modal table { margin-top: 0.5rem; }
+    .modal-close { float: right; background: none; border: none; font-size: 1.4rem; cursor: pointer; line-height: 1; }
   </style>
 </head>
 <body>
@@ -163,6 +175,7 @@ HTML = """
       <tr>
         <th class="sortable" data-col="name">Item<span class="arrow"></span></th>
         <th class="sortable" data-col="tracking">Tracking<span class="arrow"></span></th>
+        <th>Public tracking</th>
         <th class="sortable" data-col="created_at">Added<span class="arrow"></span></th>
         <th></th>
       </tr>
@@ -170,6 +183,13 @@ HTML = """
     <tbody id="items-body">
     </tbody>
   </table>
+
+  <div class="modal-backdrop" id="ext-modal-backdrop">
+    <div class="modal">
+      <button class="modal-close" id="ext-modal-close" aria-label="Close">&times;</button>
+      <div id="ext-modal-content"></div>
+    </div>
+  </div>
 
   <script>
     const allItems = {{ all_items | tojson }};
@@ -210,18 +230,24 @@ HTML = """
       filtered = sortItems(filtered);
 
       const tbody = document.getElementById('items-body');
-      tbody.innerHTML = filtered.map(item => `
-        <tr>
+      tbody.innerHTML = filtered.map(item => {
+        const extCell = item.ext
+          ? `<button class="ext-link" onclick="openExtModal(${item.id})" title="Show public tracking history">${escapeHtml(item.ext.status_label || item.ext.status)}</button>`
+          : '<span class="muted">-</span>';
+        const rowClass = item.ext ? ' class="ext-row"' : '';
+        return `
+        <tr${rowClass}>
           <td>${escapeHtml(item.name)}</td>
           <td><code>${escapeHtml(item.tracking)}</code></td>
+          <td class="ext-status">${extCell}</td>
           <td class="muted">${escapeHtml(item.created_at)}</td>
           <td>
             <form class="inline" method="post" action="/delete/${item.id}" onsubmit="return confirm('Delete this item?')">
               <button type="submit">Delete</button>
             </form>
           </td>
-        </tr>
-      `).join('');
+        </tr>`;
+      }).join('');
 
       const hiddenLinked = allItems.filter(item => item.is_linked).length;
       const summary = document.getElementById('items-summary');
@@ -261,6 +287,40 @@ HTML = """
         }
         renderItems();
       });
+    });
+
+    // ── Public tracking modal ──────────────────────────────────────
+    function openExtModal(itemId) {
+      const item = allItems.find(i => i.id === itemId);
+      if (!item || !item.ext) return;
+      const events = item.ext.events || [];
+      const rows = events.map(ev => `
+        <tr>
+          <td class="muted">${escapeHtml(ev.date || '')}</td>
+          <td>${escapeHtml(ev.status_label || ev.status || '')}</td>
+        </tr>`).join('');
+      document.getElementById('ext-modal-content').innerHTML = `
+        <h3>${escapeHtml(item.name)}</h3>
+        <p><code>${escapeHtml(item.tracking)}</code></p>
+        <p>Latest: <strong>${escapeHtml(item.ext.status_label || item.ext.status || '-')}</strong>
+           <span class="muted">${escapeHtml(item.ext.last_updated || '')}</span></p>
+        <table>
+          <thead><tr><th>Date</th><th>Event</th></tr></thead>
+          <tbody>${rows || '<tr><td colspan="2" class="muted">No events</td></tr>'}</tbody>
+        </table>`;
+      document.getElementById('ext-modal-backdrop').classList.add('open');
+    }
+
+    function closeExtModal() {
+      document.getElementById('ext-modal-backdrop').classList.remove('open');
+    }
+
+    document.getElementById('ext-modal-close').addEventListener('click', closeExtModal);
+    document.getElementById('ext-modal-backdrop').addEventListener('click', (e) => {
+      if (e.target.id === 'ext-modal-backdrop') closeExtModal();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeExtModal();
     });
 
     renderItems();
@@ -339,6 +399,24 @@ def _item_is_linked(item: dict, packages: list[dict]) -> bool:
     return False
 
 
+def _match_external(item: dict, external_rows: list[dict]) -> Optional[dict]:
+    """
+    Return the external (public) tracking row matching an item, or None.
+    Uses the same two-way substring rule as package matching.
+    """
+    item_tracking = (item.get("tracking") or "").strip()
+    if not item_tracking:
+        return None
+
+    for ext in external_rows:
+        ext_tracking = (ext.get("tracking") or "").strip()
+        if not ext_tracking:
+            continue
+        if item_tracking in ext_tracking or ext_tracking in item_tracking:
+            return ext
+    return None
+
+
 def _package_sort_key(pkg: dict):
     """
     Sort active statuses ('On the Way', 'Ready for Pickup') first,
@@ -397,9 +475,11 @@ def index():
     hidden_count = sum(1 for p in all_packages if _is_old_delivered(p))
 
     # Items section — rendered client-side from JSON.
+    external_rows = get_external_trackings(db_name=DB_NAME)
     all_items = get_items(db_name=DB_NAME)
     for item in all_items:
         item["is_linked"] = _item_is_linked(item, all_packages)
+        item["ext"] = _match_external(item, external_rows)
 
     # Packages section (displayed, possibly filtered).
     packages = all_packages if show_all else [p for p in all_packages if not _is_old_delivered(p)]

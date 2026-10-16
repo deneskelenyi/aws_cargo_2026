@@ -2,9 +2,10 @@
 Main orchestrator: scrape packages, store in SQLite, notify via Pushover/Telegram.
 
 Usage:
-    python main.py               # scrape + send consolidated alerts
+    python main.py               # scrape + check public tracking + send consolidated alerts
     python main.py --dry-run     # scrape only, print what would be sent
     python main.py --no-scrape   # skip scraping, just retry sending unsent alerts
+    python main.py --no-external # skip the public tracking check for unlinked items
     python main.py --individual  # send one alert per package instead of consolidating
 
 Environment (loaded from .env):
@@ -35,7 +36,16 @@ if _ENV_PATH.is_file():
 else:
     load_dotenv()
 
-from db import init_db, insert_or_update_package, get_unsent_packages, mark_as_sent
+from db import (
+    init_db,
+    insert_or_update_package,
+    get_unsent_packages,
+    mark_as_sent,
+    get_unlinked_items,
+    upsert_external_tracking,
+    delete_external_tracking,
+)
+from external_tracker import fetch_tracking
 from scraper import scrape_packages
 from notifier import send_consolidated_alert, send_package_alert
 
@@ -51,6 +61,11 @@ def main() -> None:
         "--no-scrape",
         action="store_true",
         help="Skip scraping; only retry sending existing unsent alerts from DB",
+    )
+    parser.add_argument(
+        "--no-external",
+        action="store_true",
+        help="Skip the public tracking check for items not yet in the internal system",
     )
     parser.add_argument(
         "--aws-token",
@@ -97,6 +112,50 @@ def main() -> None:
             print(f"  -> {pkg['tracking']}{tag_str}")
     else:
         print("[main] --no-scrape passed; skipping scrape.")
+
+    # ── Phase 1b: Public tracking for items not yet in the system ──────
+    if not args.no_scrape and not args.no_external:
+        print("[main] Checking public tracking API for unlinked items...")
+        import json as _json
+        import time as _time
+
+        unlinked = get_unlinked_items(db_name)
+        # Deduplicate tracking numbers while keeping order.
+        seen: dict[str, None] = {}
+        for item in unlinked:
+            t = (item.get("tracking") or "").strip()
+            if t:
+                seen.setdefault(t)
+        print(f"[main] {len(seen)} unique unlinked tracking number(s).")
+
+        found = 0
+        for i, tracking in enumerate(seen, start=1):
+            # Polite delay between requests (skip before the first one).
+            if i > 1:
+                _time.sleep(2)
+            try:
+                info = fetch_tracking(tracking)
+            except Exception as exc:
+                print(f"  -> {tracking}: API error ({exc})")
+                continue
+            if info is None:
+                print(f"  -> {tracking}: not on public tracking yet")
+                # Drop any stale row so the web UI doesn't show old data.
+                delete_external_tracking(tracking, db_name)
+                continue
+            upsert_external_tracking(
+                tracking=tracking,
+                status=info["status"],
+                status_label=info["status_label"],
+                last_updated=info["last_updated"],
+                events=_json.dumps(info["events"]),
+                db_name=db_name,
+            )
+            found += 1
+            print(f"  -> {tracking}: {info['status_label']} ({info['last_updated']})")
+        print(f"[main] Public tracking: {found} of {len(seen)} number(s) found.")
+    elif args.no_external:
+        print("[main] --no-external passed; skipping public tracking check.")
 
     # ── Phase 2: Notify unsent ─────────────────────────────────────────
     unsent = get_unsent_packages(db_name)
